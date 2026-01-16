@@ -13,6 +13,8 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RequiredArgsConstructor
 @RestController
 @RequestMapping("/auth")
@@ -38,8 +40,21 @@ public class UserController {
     public ResponseEntity<String> updateRegion(@RequestParam Long userId,
                                                @RequestParam String region) {
         String response = userService.updateRegion(userId, region);
-
         return ResponseEntity.ok(response);
     }
-    
+
+    @PatchMapping("/artist")
+    public ResponseEntity<String> updateArtistPrefer (@RequestParam Long userId,
+                                                      @RequestParam List<String> artist) {
+        String response = userService.updateArtistPrefer(userId, artist);
+        return ResponseEntity.ok(response);
+    }
+
+    @PatchMapping("/genre")
+    public ResponseEntity<String> updateGenrePrefer (@RequestParam Long userId,
+                                                     @RequestParam List<String> genre) {
+        String response = userService.updateGenrePrefer(userId, genre);
+        return ResponseEntity.ok(response);
+    }
+
 }

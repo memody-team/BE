@@ -1,6 +1,6 @@
 package com.guru2.memody.service;
 
-import com.guru2.memody.regionExtract.VWorldClient;
+import com.guru2.memody.extractData.VWorldClient;
 import com.guru2.memody.dto.RegionFullName;
 import com.guru2.memody.entity.Region;
 import com.guru2.memody.repository.RegionRepository;
