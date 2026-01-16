@@ -15,14 +15,14 @@ public class User {
     @Column(unique = true, nullable = false)
     private String email;
 
-    @Column(nullable = false)
+    @Column(nullable = false, unique = true)
     private String name;
 
     @Column(length = 255, nullable = false)
     private String password;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "region_code", nullable = false)
+    @JoinColumn(name = "regionId")
     private Region location;
 
     @Column(length = 500, nullable = true)

@@ -32,7 +32,7 @@ public class SecurityConfig {
                 .securityContext(security -> security.requireExplicitSave(false))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                        .requestMatchers("/api/auth/**", "/h2-console/**").permitAll()
+                        .requestMatchers("/auth/**", "/h2-console/**", "/location/search").permitAll()
                         .anyRequest().authenticated()
                 )
                 .formLogin(form -> form.disable())
