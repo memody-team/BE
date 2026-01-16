@@ -1,4 +1,4 @@
-package com.guru2.memody.regionExtract;
+package com.guru2.memody.extractData;
 
 import com.guru2.memody.dto.RegionFullName;
 import com.guru2.memody.dto.VWorldFeatureResponse;
