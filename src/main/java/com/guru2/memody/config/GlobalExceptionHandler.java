@@ -70,4 +70,16 @@ public class GlobalExceptionHandler {
                         e.getMessage()
                 ));
     }
+
+    @ExceptionHandler(NotAllowedException.class)
+    public ResponseEntity<ErrorResponse> handleNotAllowedException(
+            NotAllowedException e
+    ){
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(new ErrorResponse(
+                        "NOT_ALLOWED_REQUEST",
+                        e.getMessage()
+                ));
+    }
 }

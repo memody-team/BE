@@ -3,12 +3,12 @@ package com.guru2.memody.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.guru2.memody.dto.MusicRecordDto;
-import com.guru2.memody.dto.RecordPinResponseDto;
-import com.guru2.memody.dto.MusicSearchResponseDto;
-import com.guru2.memody.entity.Music;
+import com.guru2.memody.Exception.UserNotFoundException;
+import com.guru2.memody.dto.*;
+import com.guru2.memody.entity.*;
 import com.guru2.memody.entity.Record;
-import com.guru2.memody.entity.User;
+import com.guru2.memody.extractData.VWorldClient;
+import com.guru2.memody.repository.MusicLikeRepository;
 import com.guru2.memody.repository.MusicRepository;
 import com.guru2.memody.repository.RecordRepository;
 import com.guru2.memody.repository.UserRepository;
@@ -31,6 +31,8 @@ public class MusicService {
 
     private final UserRepository userRepository;
     private final RecordRepository recordRepository;
+    private final VWorldClient vWorldClient;
+    private final MusicLikeRepository musicLikeRepository;
 
     @Value("${lastfm.api.key}")
     private String apiKey;
@@ -73,7 +75,7 @@ public class MusicService {
     }
 
     @Transactional
-    public List<MusicSearchResponseDto> searchTrack(String search) throws JsonProcessingException {
+    public List<MusicListResponseDto> searchTrack(String search) throws JsonProcessingException {
         String response = searchTrackWithItunes(search);
 
         ObjectMapper mapper = new ObjectMapper();
@@ -81,7 +83,7 @@ public class MusicService {
 
         JsonNode results = root.path("results");
 
-        List<MusicSearchResponseDto> trackList = new ArrayList<>();
+        List<MusicListResponseDto> trackList = new ArrayList<>();
 
         for (JsonNode trackNode : results) {
 
@@ -96,7 +98,7 @@ public class MusicService {
 
             musicRepository.save(music);
 
-            trackList.add(new MusicSearchResponseDto(
+            trackList.add(new MusicListResponseDto(
                     music.getMusicId(),
                     trackNode.path("trackName").asText(),
                     trackNode.path("artistName").asText(),
@@ -118,11 +120,13 @@ public class MusicService {
         music.setSpotifyUrl(spotifyUrl);
         musicRepository.save(music);
 
+        RegionFullName regionFullName = vWorldClient.setRecordRegion(musicRecordDto.getLongitude(), musicRecordDto.getLatitude());
         Record record = new Record();
         record.setRecordMusic(music);
         record.setText(musicRecordDto.getContent());
         record.setLatitude(musicRecordDto.getLatitude());
         record.setLongitude(musicRecordDto.getLongitude());
+        record.setRecordLocation(regionFullName.getName());
         record.setRecordTime(LocalDateTime.now());
         record.setUser(user);
         recordRepository.save(record);
@@ -151,6 +155,49 @@ public class MusicService {
                 .path("spotify")
                 .path("url")
                 .asText();
+    }
+
+    public LikeResponseDto likeTrack(Long userId, Long musicId) {
+        User user = userRepository.findUserByUserId(userId).orElseThrow(
+                UserNotFoundException::new
+        );
+        LikeResponseDto likeResponseDto = new LikeResponseDto();
+
+        Music music = musicRepository.findMusicByMusicId(musicId);
+        musicLikeRepository.findByUserAndMusic(user, music)
+                        .ifPresentOrElse(existML -> {
+                            musicLikeRepository.delete(existML);
+                            likeResponseDto.setLikeType(LikeType.MUSIC);
+                            likeResponseDto.setLike(false);
+                            likeResponseDto.setLikeCount(0);
+                                },
+                                ()  -> {
+                                    MusicLike newMusicLike = new MusicLike();
+                                    newMusicLike.setUser(user);
+                                    newMusicLike.setMusic(music);
+                                    newMusicLike.setLikeDate(LocalDateTime.now());
+                                    musicLikeRepository.save(newMusicLike);
+                                    likeResponseDto.setLikeCount(1);
+                                    likeResponseDto.setLikeType(LikeType.MUSIC);
+                                    likeResponseDto.setLike(true);
+                        });
+
+
+        return likeResponseDto;
+    }
+
+    public List<MusicListResponseDto> getLikedMusicList(Long userId) {
+        User user = userRepository.findUserByUserId(userId).orElseThrow(
+                UserNotFoundException::new
+        );
+        List<MusicLike> musicLikes = musicLikeRepository.findAllByUser(user);
+        List<MusicListResponseDto> musicListResponseDtos = new ArrayList<>();
+        for (MusicLike musicLike : musicLikes) {
+            MusicListResponseDto musicListResponseDto = new MusicListResponseDto(musicLike.getMusic().getMusicId(), musicLike.getMusic().getTitle(),
+                    musicLike.getMusic().getArtist(), musicLike.getMusic().getThumbnailUrl());
+            musicListResponseDtos.add(musicListResponseDto);
+        }
+        return musicListResponseDtos;
     }
 
 

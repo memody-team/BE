@@ -3,11 +3,8 @@ package com.guru2.memody.dto;
 import lombok.Getter;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
-
-@Getter
-@Setter
-public class RecordDetailDto {
+@Getter @Setter
+public class MyRecordResponseDto {
     private String title;
     private String artist;
     private String content;
@@ -15,4 +12,5 @@ public class RecordDetailDto {
     private String thumbnail;
     private String spotifyUrl;
     private String iTunesUrl;
+    private String regionName;
 }

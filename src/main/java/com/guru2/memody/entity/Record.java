@@ -31,4 +31,6 @@ public class Record {
 
     private Double latitude;
     private Double longitude;
+
+    private Integer likeCount = 0;
 }

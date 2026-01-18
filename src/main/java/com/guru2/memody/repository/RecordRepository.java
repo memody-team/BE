@@ -10,4 +10,8 @@ public interface RecordRepository extends JpaRepository<Record, Long> {
     List<Record> findAllByUser(User user);
 
     List<Record> findAllByUserNot(User user);
+
+    List<Record> findAllByOrderByRecordTimeDesc();
+
+    List<Record> findAllByUserOrderByRecordTimeDesc(User user);
 }
