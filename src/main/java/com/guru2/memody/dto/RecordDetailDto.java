@@ -14,9 +14,9 @@ public class RecordDetailDto {
     private String content;
     private String recordDate;
     private String thumbnail;
+    private List<String> imageUrls;
     private String spotifyUrl;
     private String iTunesUrl;
-    private List<String> imageUrls;
     private Boolean liked;
     private Integer likeCount;
 }

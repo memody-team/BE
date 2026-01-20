@@ -3,6 +3,7 @@ package com.guru2.memody.repository;
 import com.guru2.memody.entity.Music;
 import com.guru2.memody.entity.MusicLike;
 import com.guru2.memody.entity.User;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -15,4 +16,6 @@ public interface MusicLikeRepository extends JpaRepository<MusicLike, Integer> {
     Optional<MusicLike> findByUserAndMusic(User user, Music music);
 
     List<MusicLike> findAllByUser(User user);
+
+    List<MusicLike> findAllByUserOrderByLikeDateDesc(User user, Limit limit);
 }

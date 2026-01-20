@@ -43,57 +43,16 @@ public class MusicService {
     private final RecordImageRepository recordImageRepository;
     private final ArtistRepository artistRepository;
     private final MusicRepository musicRepository;
-    private final LikeRepository likeRepository;
 
-    @Value("${lastfm.api.key}")
-    private String apiKey;
+    private final ITunesService itunesService;
 
     private final RestTemplate restTemplate = new RestTemplate();
 
-    private static final String APPLE_BASE_URL = "https://itunes.apple.com/search";
-    private static final String APPLE_IMAGE_URL = "https://itunes.apple.com/lookup";
-
     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-
-    public String searchTrackWithItunes(String search) {
-        String uri = UriComponentsBuilder.fromUriString(APPLE_BASE_URL)
-                .queryParam("term", search)
-                .queryParam("country", "KR")
-                .queryParam("media", "music")
-                .queryParam("lang", "ko_kr")
-                .queryParam("entity", "song")
-                .queryParam("limit", 20)
-                .toUriString();
-        return restTemplate.getForObject(uri, String.class);
-    }
-
-    public String searchArtistWithItunes(String search) {
-        String uri = UriComponentsBuilder.fromUriString(APPLE_BASE_URL)
-                .queryParam("term", search)
-                .queryParam("country", "KR")
-                .queryParam("media", "music")
-                .queryParam("lang", "ko_kr")
-                .queryParam("entity", "musicArtist")
-                .queryParam("limit", 9)
-                .toUriString();
-        return restTemplate.getForObject(uri, String.class);
-    }
-
-    public String searchArtistImageWithItunes(Long id) {
-        String uri = UriComponentsBuilder.fromUriString(APPLE_IMAGE_URL)
-                .queryParam("id", id)
-                .queryParam("country", "KR")
-                .queryParam("entity", "song")
-                .queryParam("attribute", "artistTerm")
-                .queryParam("limit", 1)
-                .toUriString();
-
-        return restTemplate.getForObject(uri, String.class);
-    }
 
     @Transactional
     public List<MusicListResponseDto> searchTrack(String search) throws JsonProcessingException {
-        String response = searchTrackWithItunes(search);
+        String response = itunesService.searchTrackWithItunes(search);
 
         ObjectMapper mapper = new ObjectMapper();
         JsonNode root = mapper.readTree(response);
@@ -217,20 +176,6 @@ public class MusicService {
         return likeResponseDto;
     }
 
-    public List<MusicListResponseDto> getLikedMusicList(Long userId) {
-        User user = userRepository.findUserByUserId(userId).orElseThrow(
-                UserNotFoundException::new
-        );
-        List<MusicLike> musicLikes = musicLikeRepository.findAllByUser(user);
-        List<MusicListResponseDto> musicListResponseDtos = new ArrayList<>();
-        for (MusicLike musicLike : musicLikes) {
-            MusicListResponseDto musicListResponseDto = new MusicListResponseDto(musicLike.getMusic().getMusicId(), musicLike.getMusic().getTitle(),
-                    musicLike.getMusic().getArtist(), musicLike.getMusic().getThumbnailUrl());
-            musicListResponseDtos.add(musicListResponseDto);
-        }
-        return musicListResponseDtos;
-    }
-
     private static final String UPLOAD_DIR = "uploads/images/";
 
     public String saveImage(MultipartFile file) {
@@ -261,7 +206,7 @@ public class MusicService {
     }
 
     public List<ArtistResponseDto> getArtistList(String search) throws JsonProcessingException {
-        String response = searchArtistWithItunes(search);
+        String response = itunesService.searchArtistWithItunes(search);
         ObjectMapper mapper = new ObjectMapper();
         JsonNode root = mapper.readTree(response);
 
@@ -274,7 +219,7 @@ public class MusicService {
             Long itunesArtistId = trackNode.path("artistId").asLong();
             String artistName = trackNode.path("artistName").asText();
 
-            String imageResponse = searchArtistImageWithItunes(itunesArtistId);
+            String imageResponse = itunesService.searchArtistImageWithItunes(itunesArtistId);
             ObjectMapper imageMapper = new ObjectMapper();
             JsonNode imageRoot = imageMapper.readTree(imageResponse);
 
