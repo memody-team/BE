@@ -100,7 +100,7 @@ public class MusicService {
         RegionFullName regionFullName = vWorldClient.setRecordRegion(musicRecordDto.getLongitude(), musicRecordDto.getLatitude());
         Record record = new Record();
 
-        if (!images.isEmpty()){
+        if (images != null){
             for (MultipartFile multipartFile : images){
                 RecordImage recordImage = new RecordImage();
                 if(multipartFile.isEmpty()) continue;

@@ -193,4 +193,43 @@ public class RecordService {
 
         return myRecordResponseDtos;
     }
+
+    public List<PinnedListDto> getLatentPin(Long userId){
+        User user = userRepository.findUserByUserId(userId)
+                .orElseThrow(UserNotFoundException::new);
+        List<Record> records = recordRepository.findAllByUserOrderByRecordTimeDesc(user);
+        List<PinnedListDto> pinnedListDtos = new ArrayList<>();
+
+        String lastDate = "";
+        PinnedListDto currentPinnedListDto = null;
+
+        for (Record record : records) {
+            String recordDate = record.getRecordTime().format(formatter);
+
+            if(!recordDate.equals(lastDate)){
+                currentPinnedListDto = new PinnedListDto();
+                currentPinnedListDto.setPinnedDate(recordDate);
+                currentPinnedListDto.setMusicList(new ArrayList<>());
+
+                pinnedListDtos.add(currentPinnedListDto);
+                lastDate = recordDate;
+            }
+
+            PinnedRecordDto pinnedRecordDto = new PinnedRecordDto();
+            pinnedRecordDto.setTitle(record.getRecordMusic().getTitle());
+            pinnedRecordDto.setArtist(record.getRecordMusic().getArtist());
+            pinnedRecordDto.setThumbnailUrl(record.getRecordMusic().getThumbnailUrl());
+
+            String location = record.getRecordLocation();
+            if(location != null && !location.isEmpty()){
+                String[] parts = location.split(" ");
+                pinnedRecordDto.setRegion(parts[1]);
+            }
+
+            if (currentPinnedListDto != null) {
+                currentPinnedListDto.getMusicList().add(pinnedRecordDto);
+            }
+        }
+        return pinnedListDtos;
+    }
 }
