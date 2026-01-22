@@ -5,6 +5,7 @@ import com.guru2.memody.config.CustomUserDetails;
 import com.guru2.memody.dto.*;
 import com.guru2.memody.service.MusicService;
 import com.guru2.memody.service.RecommendService;
+import com.guru2.memody.service.RecordService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -23,6 +24,7 @@ public class MusicController {
 
     private final MusicService musicService;
     private final RecommendService recommendService;
+    private final RecordService recordService;
 
     @GetMapping("/search")
     public ResponseEntity<List<MusicListResponseDto>> searchTrack(@RequestParam String search) throws JsonProcessingException {
@@ -63,7 +65,35 @@ public class MusicController {
     public ResponseEntity<List<MusicListResponseDto>> getRecommend(@AuthenticationPrincipal CustomUserDetails user,
                                                                    @RequestBody RecommendRequestDto recommendRequestDto) throws JsonProcessingException {
         Long userId = user.getUserId();
-        List<MusicListResponseDto> response = recommendService.getRecommendByOnboarding(userId, recommendRequestDto);
+        List<MusicListResponseDto> response = recommendService.getRecommendTrackByOnboarding(userId, recommendRequestDto);
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/today")
+    public ResponseEntity<List<MusicListResponseDto>> getTodayRecommend(@AuthenticationPrincipal CustomUserDetails user) throws JsonProcessingException {
+        Long userId = user.getUserId();
+        List<MusicListResponseDto> response = recommendService.getRecommendTrackByUserInfo(userId);
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/pin")
+    public ResponseEntity<List<PinnedListDto>> getLatentPin(@AuthenticationPrincipal CustomUserDetails user) {
+        Long userId = user.getUserId();
+        List<PinnedListDto> response = recordService.getLatentPin(userId);
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/album/{albumId}")
+    public ResponseEntity<AlbumDetailDto> getTodayAlbum(@AuthenticationPrincipal CustomUserDetails user, @PathVariable Long albumId) {
+        Long userId = user.getUserId();
+        AlbumDetailDto response = musicService.getAlbumDetail(userId, albumId);
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/today/artist")
+    public ResponseEntity<ArtistRecommendDto> getTodayArtist(@AuthenticationPrincipal CustomUserDetails user) {
+        Long userId = user.getUserId();
+        ArtistRecommendDto response = musicService.getArtistRecommendDetail(userId);
         return ResponseEntity.ok(response);
     }
 }

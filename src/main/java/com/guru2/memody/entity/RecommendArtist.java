@@ -10,29 +10,30 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Entity
-@Table(name="recommend")
+@Table(name = "recommend_artist")
 @Getter @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-public class Recommend {
+public class RecommendArtist {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long recommendId;
+    private Long recommendArtistId;
 
     @OneToOne
-    @JoinColumn(name = "user_id", nullable = false)
+    @JoinColumn(name = "user_id")
     private User user;
 
-    private LocalDateTime createTime;
+    @ManyToOne
+    @JoinColumn(name = "artist_id")
+    private Artist artist;
 
-    private Enum MomentType;
-    private Enum MoodType;
-
-    @ManyToMany
+    @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(
-            name = "recommend_music",
-            joinColumns = @JoinColumn(name = "recommend_id"),
+            name = "recommend_artist_musics",
+            joinColumns = @JoinColumn(name = "recommend_artist_id"),
             inverseJoinColumns = @JoinColumn(name = "music_id")
     )
-    private List<Music> recommendMusic;
+    private List<Music> recommendedItems;
+
+    private LocalDateTime createTime;
 }

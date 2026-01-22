@@ -102,5 +102,49 @@ public class ITunesService {
         return restTemplate.getForObject(uri, String.class);
     }
 
+    public String searchAlbumWithClearInfo(String title, String artist){
+        String term = title + " " + artist;
+
+        URI uri = UriComponentsBuilder
+                .fromUriString(APPLE_SEARCH_URL)
+                .queryParam("term", term)
+                .queryParam("media", "music")
+                .queryParam("entity", "album")
+                .queryParam("limit", 1)
+                .queryParam("country", "KR")
+                .encode(StandardCharsets.UTF_8)
+                .build()
+                .toUri();
+
+        return restTemplate.getForObject(uri, String.class);
+    }
+
+    public String searchTrackWithAlbum(String term){
+        URI uri = UriComponentsBuilder
+                .fromUriString(APPLE_SEARCH_URL)
+                .queryParam("term", term)
+                .queryParam("media", "music")
+                .queryParam("entity", "song")
+                .queryParam("limit", 20)
+                .queryParam("country", "KR")
+                .encode(StandardCharsets.UTF_8)
+                .build()
+                .toUri();
+
+        return restTemplate.getForObject(uri, String.class);
+    }
+
+    public String lookupTracksByAlbumId(Long id) {
+        URI uri = UriComponentsBuilder
+                .fromUriString(APPLE_LOOKUP_URL)
+                .queryParam("id", id)
+                .queryParam("media", "music")
+                .queryParam("entity", "song")
+                .encode(StandardCharsets.UTF_8)
+                .build()
+                .toUri();
+
+        return restTemplate.getForObject(uri, String.class);
+    }
 
 }

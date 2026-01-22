@@ -6,11 +6,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.genai.Client;
 import com.google.genai.types.GenerateContentResponse;
 import com.guru2.memody.Exception.UserNotFoundException;
-import com.guru2.memody.dto.MusicListResponseDto;
-import com.guru2.memody.dto.RecommendRequestDto;
+import com.guru2.memody.dto.*;
 import com.guru2.memody.entity.*;
 import com.guru2.memody.entity.Record;
 import com.guru2.memody.repository.*;
+import jakarta.transaction.Transactional;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
@@ -18,14 +18,10 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Limit;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriComponentsBuilder;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -35,8 +31,13 @@ import java.util.List;
 @RequiredArgsConstructor
 public class RecommendService {
     private final UserRepository userRepository;
-    private final RecommendRepository recommendRepository;
+    private final RecommendMusicRepository recommendRepository;
     private final RestTemplate restTemplate = new RestTemplate();
+    private final AlbumRepository albumRepository;
+    private final RecommendAlbumRepository recommendAlbumRepository;
+    private final RecommendArtistRepository recommendArtistRepository;
+    private final ArtistRepository artistRepository;
+    private final RecommendMusicRepository recommendMusicRepository;
 
     @Value("${GEMINI_API_KEY}") // properties에 넣은 값
     private String geminiApiKey;
@@ -65,7 +66,8 @@ public class RecommendService {
         private String country;
     }
 
-    private String createRecommendationPrompt(User user, RecommendRequestDto recommend) {
+    private List<String> userInfoToPrompt(User user){
+        List<String> userInfo = new ArrayList<>();
         List<String> genreNames = genrePreferenceRepository.findAllByUser(user)
                 .stream()
                 .map(g -> g.getGenre().getGenreName())
@@ -91,6 +93,124 @@ public class RecommendService {
                                 + ", 기록한 이유: " + record.getText()
                 )
                 .toList();
+        userInfo.add(genreNames.toString());
+        userInfo.add(artistNames.toString());
+        userInfo.add(musicNames.toString());
+        userInfo.add(recordContents.toString());
+        return userInfo;
+    }
+
+    private String createPromptWithUserInfo(User user, String purpose){
+        List<String> userInfo = userInfoToPrompt(user);
+
+        String prompt = """
+                아래는 음악 기록 및 추천 서비스 유저의 음악 선호 정보입니다.
+                좋아요 누른 음악과 기록한 음악은 각각 0개 이상 3개 이하의 가장 최근 데이터입니다. \n
+                기록한 음악은 기록한 당시 사용자가 입력한 음악에 대한 감상이 포함되어 있습니다.
+                
+                추천 기준: 
+                1. 유저가 '좋아요' 하거나 '기록한' 음악과 유사한 분위기를 최우선으로 찾으세요.
+                2. 해당 데이터가 부족하면 선호 장르/가수 기반으로 확장하세요.
+                3. 노래의 분위기(Vibe)가 유저의 취향과 맞아야 합니다.
+                4. **추천 결과의 80퍼센트는 반드시 한국 음악(K-Pop, 인디 등)이어야 합니다.**
+                
+                [기존 유저 정보]
+                좋아하는 음악 장르: %s
+                좋아하는 분위기의 가수: %s
+                좋아요 누른 음악: %s
+                기록한 음악(감상 포함): %s
+                
+                응답 규칙(매우 중요):
+                - 출력 형식은 다음과 같습니다.
+                
+                {
+                  "total": 숫자,
+                  "recommendations": [
+                    {
+                      "title": "%s",
+                      "artist": "가수명",
+                      "country": "KR or OTHER"
+                    }
+                  ]
+                }
+                
+                규칙:
+                - total은 recommendations 배열 길이와 동일해야 합니다.
+                - %s 최소 5개, 최대 10개입니다.
+                - 전체 추천 곡 중 80퍼센트 이상은 country가 "KR"이어야 합니다.
+                - title과 artist는 iTunes Search API에서 검색 가능한 정확한 명칭을 사용하세요.
+                - 다른 텍스트는 절대 포함하지 마세요.
+            
+                """.formatted(
+                userInfo.get(0).isEmpty() ? "없음" : String.join(", ", userInfo.get(0)),
+                userInfo.get(1).isEmpty() ? "없음" : String.join(", ", userInfo.get(1)),
+                userInfo.get(2).isEmpty() ? "없음" : String.join(", ", userInfo.get(2)),
+                userInfo.get(3).isEmpty() ? "없음" : String.join(" | ", userInfo.get(3)),
+                purpose,
+                purpose.equals("곡 제목") ? "추천 곡은" : "앨범 개수는"
+        );
+
+        log.info(prompt);
+
+        return  prompt;
+    }
+
+    private String createArtistPromptWithUserInfo(User user){
+        List<String> userInfo = userInfoToPrompt(user);
+
+        String prompt = """
+                아래는 음악 기록 및 추천 서비스 유저의 음악 선호 정보입니다.
+                좋아요 누른 음악과 기록한 음악은 각각 0개 이상 3개 이하의 가장 최근 데이터입니다. \n
+                기록한 음악은 기록한 당시 사용자가 입력한 음악에 대한 감상이 포함되어 있습니다.
+                
+                추천 기준: 
+                1. 유저가 '좋아요' 하거나 '기록한' 음악과 유사한 분위기를 최우선으로 찾으세요.
+                2. 해당 데이터가 부족하면 선호 장르/가수 기반으로 확장하세요.
+                3. 노래의 분위기(Vibe)가 유저의 취향과 맞아야 합니다.
+                4. **추천 결과는 모두 동일 가수의 곡이어야 합니다.**
+                
+                [기존 유저 정보]
+                좋아하는 음악 장르: %s
+                좋아하는 분위기의 가수: %s
+                좋아요 누른 음악: %s
+                기록한 음악(감상 포함): %s
+                
+                응답 규칙(매우 중요):
+                - 출력 형식은 다음과 같습니다.
+                
+                {
+                  "total": 숫자,
+                  "recommendations": [
+                    {
+                      "title": "곡 제목",
+                      "artist": "가수명",
+                      "country": "KR or OTHER"
+                    }
+                  ]
+                }
+                
+                규칙:
+                - total은 recommendations 배열 길이와 동일해야 합니다.
+                - 곡 개수는 최소 5개, 최대 10개입니다.
+                - 전체 추천 곡 중 80퍼센트 이상은 country가 "KR"이어야 합니다.
+                - title과 artist는 iTunes Search API에서 검색 가능한 정확한 명칭을 사용하세요.
+                - 다른 텍스트는 절대 포함하지 마세요.
+            
+                """.formatted(
+                userInfo.get(0).isEmpty() ? "없음" : String.join(", ", userInfo.get(0)),
+                userInfo.get(1).isEmpty() ? "없음" : String.join(", ", userInfo.get(1)),
+                userInfo.get(2).isEmpty() ? "없음" : String.join(", ", userInfo.get(2)),
+                userInfo.get(3).isEmpty() ? "없음" : String.join(" | ", userInfo.get(3))
+        );
+
+        log.info(prompt);
+
+        return  prompt;
+    }
+
+    private String createPromptWithOnboarding(User user, RecommendRequestDto recommend) {
+
+        List<String> userInfo = userInfoToPrompt(user);
 
         String prompt = """
                 아래는 음악 기록 및 추천 서비스 유저의 음악 선호 정보와, 현재 유저가 듣고 싶어하는 음악의 정보입니다.
@@ -139,10 +259,10 @@ public class RecommendService {
                 - 다른 텍스트는 절대 포함하지 마세요.
             
                 """.formatted(
-                genreNames.isEmpty() ? "없음" : String.join(", ", genreNames),
-                artistNames.isEmpty() ? "없음" : String.join(", ", artistNames),
-                musicNames.isEmpty() ? "없음" : String.join(", ", musicNames),
-                recordContents.isEmpty() ? "없음" : String.join(" | ", recordContents),
+                userInfo.get(0).isEmpty() ? "없음" : String.join(", ", userInfo.get(0)),
+                userInfo.get(1).isEmpty() ? "없음" : String.join(", ", userInfo.get(1)),
+                userInfo.get(2).isEmpty() ? "없음" : String.join(", ", userInfo.get(2)),
+                userInfo.get(3).isEmpty() ? "없음" : String.join(" | ", userInfo.get(3)),
                 recommend.getMoment(),
                 recommend.getMood(),
                 recommend.getArtistNames(),
@@ -186,17 +306,17 @@ public class RecommendService {
 
 
 
-    public List<MusicListResponseDto> getRecommendByOnboarding(Long userId, RecommendRequestDto recommendRequestDto) throws JsonProcessingException {
+    public List<MusicListResponseDto> getRecommendTrackByOnboarding(Long userId, RecommendRequestDto recommendRequestDto) throws JsonProcessingException {
         User user = userRepository.findUserByUserId(userId).orElseThrow(UserNotFoundException::new);
         recommendRepository.findByUser(user)
                 .ifPresent(recommendRepository::delete);
-        Recommend recommend = new Recommend();
+        RecommendMusic recommend = new RecommendMusic();
         recommend.setUser(user);
         recommend.setMomentType(Moment.valueOf(recommendRequestDto.getMoment()));
         recommend.setMoodType(Mood.valueOf(recommendRequestDto.getMood()));
         recommend.setCreateTime(LocalDateTime.now());
 
-        String prompt = createRecommendationPrompt(user, recommendRequestDto);
+        String prompt = createPromptWithOnboarding(user, recommendRequestDto);
         String response = callGemini(prompt);
         List<GeminiRecommendationDto> recommendedItems = parseGeminiResponse(response);
 
@@ -235,11 +355,327 @@ public class RecommendService {
                 log.error("iTunes 검색 중 오류 발생: {} - {}", item.getTitle(), item.getArtist(), e);
             }
 
-            recommend.setRecommendMusic(musicList);
+            recommend.setRecommendMusics(musicList);
             recommendRepository.save(recommend);
         }
 
         return trackList;
+    }
+
+    public List<MusicListResponseDto> getRecommendTrackByUserInfo(Long userId){
+        User user = userRepository.findUserByUserId(userId).orElseThrow(
+                UserNotFoundException::new
+        );
+
+        RecommendMusic recommend = recommendRepository.findByUser(user).orElseGet(
+                RecommendMusic::new
+        );
+        List<MusicListResponseDto> trackList = new ArrayList<>();
+        if (recommend.getRecommendMusics() != null && recommend.getCreateTime().toLocalDate().isEqual(LocalDate.now())) {
+            for (Music music : recommend.getRecommendMusics()) {
+                MusicListResponseDto musicListResponseDto = new MusicListResponseDto(music.getMusicId(), music.getTitle(), music.getArtist(), music.getThumbnailUrl());
+                trackList.add(musicListResponseDto);
+            }
+            return trackList;
+        }
+
+        recommend.setUser(user);
+        recommend.setMomentType(null);
+        recommend.setMoodType(null);
+        recommend.setCreateTime(LocalDateTime.now());
+
+        String prompt = createPromptWithUserInfo(user, "곡 제목");
+        String response = callGemini(prompt);
+        List<GeminiRecommendationDto> recommendedItems = parseGeminiResponse(response);
+
+        List<Music> musicList = new ArrayList<>();
+
+        for(GeminiRecommendationDto item : recommendedItems) {
+            try{
+                String musicResponse = itunesService.searchTrackWithClearInfo(item.getTitle(), item.getArtist());
+                ObjectMapper mapper = new ObjectMapper();
+                JsonNode root = mapper.readTree(musicResponse);
+
+                JsonNode results = root.path("results");
+                for (JsonNode trackNode : results) {
+                    Music music = null;
+                    music = musicRepository.findMusicByItunesId(trackNode.path("trackId").asLong()).orElse(
+                            new Music()
+                    );
+
+                    music.setItunesId(trackNode.path("trackId").asLong());
+                    music.setTitle(trackNode.path("trackName").asText());
+                    music.setArtist(trackNode.path("artistName").asText());
+                    music.setAppleMusicUrl(trackNode.path("trackViewUrl").asText());
+                    music.setThumbnailUrl(trackNode.path("artworkUrl100").asText());
+                    musicList.add(music);
+                    musicRepository.save(music);
+
+                    trackList.add(new MusicListResponseDto(
+                            music.getMusicId(),
+                            trackNode.path("trackName").asText(),
+                            trackNode.path("artistName").asText(),
+                            trackNode.path("artworkUrl100").asText()
+                    ));
+                }
+            } catch (Exception e) {
+                log.error("iTunes 검색 중 오류 발생: {} - {}", item.getTitle(), item.getArtist(), e);
+            }
+
+            recommend.setRecommendMusics(musicList);
+            recommendRepository.save(recommend);
+        }
+
+        return trackList;
+    }
+
+    @Transactional
+    public RecommendAlbum getRecommendAlbumByUserInfo(Long userId) {
+        User user = userRepository.findUserByUserId(userId).orElseThrow(
+                UserNotFoundException::new
+        );
+        RecommendAlbum recommendAlbum = recommendAlbumRepository.findByUser(user)
+                .orElseGet(
+                RecommendAlbum::new
+        );
+        recommendAlbum.setUser(user);
+        if (recommendAlbum.getAlbums() != null && recommendAlbum.getCreateTime().toLocalDate().isEqual(LocalDate.now())) {
+            return recommendAlbum;
+        }
+
+        String prompt = createPromptWithUserInfo(user, "앨범 명");
+        String response = callGemini(prompt);
+        List<GeminiRecommendationDto> recommendedItems = parseGeminiResponse(response);
+
+        List<Album> albumList = new ArrayList<>();
+        ObjectMapper mapper = new ObjectMapper();
+
+        for(GeminiRecommendationDto item : recommendedItems) {
+            try {
+                String albumResponse = itunesService.searchAlbumWithClearInfo(item.getTitle(), item.getArtist());
+                JsonNode root = mapper.readTree(albumResponse);
+
+                JsonNode results = root.path("results");
+                for (JsonNode albumNode : results) {
+                    Long albumItunesId = albumNode.path("collectionId").asLong();
+                    Album album = null;
+                    album = albumRepository.findByItunesId(albumItunesId).orElse(
+                            new Album()
+                    );
+
+                    album.setItunesId(albumItunesId);
+                    album.setTitle(albumNode.path("collectionName").asText());
+                    album.setArtist(albumNode.path("artistName").asText());
+                    album.setThumbnailUrl(albumNode.path("artworkUrl100").asText());
+                    albumList.add(album);
+                    albumRepository.save(album);
+
+                    String musicResponse = itunesService.lookupTracksByAlbumId(albumItunesId);
+                    JsonNode trackRoot = mapper.readTree(musicResponse);
+                    JsonNode trackResults = trackRoot.path("results");
+                    List<Music> currentAlbumTracks = new ArrayList<>();
+
+                    for (int i = 0; i < trackResults.size(); i++) {
+                        JsonNode trackNode = trackResults.get(i);
+                        if (trackNode.path("wrapperType").asText().equals("track")) {
+                            Music music = musicRepository.findMusicByItunesId(trackNode.path("trackId").asLong())
+                                    .orElse(new Music());
+
+                            music.setItunesId(trackNode.path("trackId").asLong());
+                            music.setTitle(trackNode.path("trackName").asText());
+                            music.setArtist(trackNode.path("artistName").asText());
+                            music.setAppleMusicUrl(trackNode.path("trackViewUrl").asText());
+                            music.setThumbnailUrl(trackNode.path("artworkUrl100").asText());
+
+                            musicRepository.save(music);
+                            currentAlbumTracks.add(music);
+                        }
+                    }
+                    album.setIncludedSongs(currentAlbumTracks);
+                }
+
+
+            } catch (JsonProcessingException jsonProcessingException) {
+                throw new RuntimeException(jsonProcessingException);
+            } catch (Exception e) {
+                log.error("iTunes 검색 중 오류 발생: {} - {}", item.getTitle(), item.getArtist(), e);
+            }
+
+        }
+        recommendAlbum.setAlbums(albumList);
+        recommendAlbum.setCreateTime(LocalDateTime.now());
+        recommendAlbumRepository.save(recommendAlbum);
+        return recommendAlbum;
 
     }
+
+    @Transactional
+    public RecommendArtist getRecommendArtistByUserInfo(Long userId) {
+        User user = userRepository.findUserByUserId(userId).orElseThrow(UserNotFoundException::new);
+
+        RecommendArtist recommendArtist = recommendArtistRepository.findByUser(user)
+                .orElseGet(() -> {
+                    RecommendArtist newRa = new RecommendArtist();
+                    newRa.setUser(user);
+                    return newRa;
+                });
+
+        if (recommendArtist.getArtist() != null && recommendArtist.getCreateTime() != null
+                && recommendArtist.getCreateTime().toLocalDate().isEqual(LocalDate.now())) {
+            return recommendArtist;
+        }
+
+        String prompt = createArtistPromptWithUserInfo(user);
+        String response = callGemini(prompt);
+        List<GeminiRecommendationDto> recommendedItems = parseGeminiResponse(response);
+
+        if (recommendedItems.isEmpty()) {
+            throw new RuntimeException("AI 추천 결과가 없습니다.");
+        }
+
+        String artistName = recommendedItems.get(0).getArtist();
+        Artist artist = null;
+
+        try {
+            String artistJson = itunesService.searchArtistWithItunes(artistName);
+            JsonNode artistRoot = objectMapper.readTree(artistJson);
+            JsonNode artistResults = artistRoot.path("results");
+
+            if (artistResults.size() > 0) {
+                JsonNode artistNode = artistResults.get(0);
+                Long itunesArtistId = artistNode.path("artistId").asLong();
+
+                artist = artistRepository.findByItunesArtistId(itunesArtistId).orElse(new Artist());
+                artist.setItunesArtistId(itunesArtistId);
+                artist.setArtistName(artistNode.path("artistName").asText());
+
+
+                artistRepository.save(artist);
+            } else {
+                log.warn("iTunes 가수 검색 실패: {}", artistName);
+            }
+        } catch (Exception e) {
+            log.error("가수 정보 처리 중 오류: {}", artistName, e);
+        }
+
+        List<Music> musicList = new ArrayList<>();
+
+        for (GeminiRecommendationDto item : recommendedItems) {
+            try {
+                String searchResponse = itunesService.searchTrackWithClearInfo(item.getTitle(), item.getArtist());
+                JsonNode root = objectMapper.readTree(searchResponse);
+                JsonNode results = root.path("results");
+
+                if (results.size() > 0) {
+                    JsonNode trackNode = results.get(0);
+
+                    Music music = musicRepository.findMusicByItunesId(trackNode.path("trackId").asLong())
+                            .orElse(new Music());
+
+                    music.setItunesId(trackNode.path("trackId").asLong());
+                    music.setTitle(trackNode.path("trackName").asText());
+                    music.setArtist(trackNode.path("artistName").asText());
+                    music.setAppleMusicUrl(trackNode.path("trackViewUrl").asText());
+                    music.setThumbnailUrl(trackNode.path("artworkUrl100").asText());
+
+                    musicRepository.save(music);
+                    musicList.add(music);
+                }
+            } catch (Exception e) {
+                log.warn("가수 추천 곡 검색 실패: {}", item.getTitle());
+            }
+        }
+
+        if (artist != null) {
+            recommendArtist.setArtist(artist);
+        }
+        recommendArtist.setRecommendedItems(musicList);
+        recommendArtist.setCreateTime(LocalDateTime.now());
+        recommendArtistRepository.save(recommendArtist);
+
+        return recommendArtist;
+    }
+
+    @Transactional
+    public HomeDto getHome(Long userId) {
+        User user = userRepository.findUserByUserId(userId).orElseThrow(UserNotFoundException::new);
+        RecommendMusic recommendMusic = recommendMusicRepository.findByUser(user).orElse(null);
+
+        List<Record> records = recordRepository.findAllByUserOrderByRecordTimeDesc(user);
+        RecommendAlbum recommendAlbum = getRecommendAlbumByUserInfo(userId);
+        RecommendArtist recommendArtist = getRecommendArtistByUserInfo(userId);
+
+        List<MusicCardDto> todays = new ArrayList<>();
+        List<MusicCardWithRegionDto> recorded = new ArrayList<>();
+        List<MusicCardDto> albums = new ArrayList<>();
+        List<MusicCardDto> artists = new ArrayList<>();
+
+        List<Music> todayList;
+        try{
+            todayList = recommendMusic.getRecommendMusics();
+        } catch (Exception e){
+            todayList = null;
+        }
+        List<Album> albumList = recommendAlbum.getAlbums();
+        List<Music> artistList = recommendArtist.getRecommendedItems();
+
+
+        if (todayList != null && !todayList.isEmpty()
+                && recommendMusic.getCreateTime().toLocalDate().isEqual(LocalDate.now())) {
+
+            for (Music music : todayList) {
+                MusicCardDto dto = new MusicCardDto();
+                dto.setTitle(music.getTitle());
+                dto.setArtist(music.getArtist());
+                dto.setThumbnailUrl(music.getThumbnailUrl());
+                dto.setMusicId(music.getMusicId());
+                todays.add(dto);
+            }
+        }
+
+        int count = 0;
+        for(Record record : records) {
+            if(count > 12){
+                break;
+            }
+            MusicCardWithRegionDto musicCardWithRegionDto = new MusicCardWithRegionDto();
+            musicCardWithRegionDto.setMusicId(record.getRecordMusic().getMusicId());
+            musicCardWithRegionDto.setTitle(record.getRecordMusic().getTitle());
+            musicCardWithRegionDto.setArtist(record.getRecordMusic().getArtist());
+            String[] parts = record.getRecordLocation().split(" ");
+            musicCardWithRegionDto.setRegion(parts[1]);
+            musicCardWithRegionDto.setThumbnailUrl(record.getRecordMusic().getThumbnailUrl());
+            recorded.add(musicCardWithRegionDto);
+            count++;
+        }
+
+
+        for(Album album : albumList) {
+            MusicCardDto musicCardDto = new MusicCardDto();
+            musicCardDto.setArtist(album.getArtist());
+            musicCardDto.setTitle(album.getTitle());
+            musicCardDto.setMusicId(album.getAlbumId());
+            musicCardDto.setThumbnailUrl(album.getThumbnailUrl());
+            albums.add(musicCardDto);
+        }
+
+        for(Music artist : artistList) {
+            MusicCardDto musicCardDto = new MusicCardDto();
+            musicCardDto.setMusicId(artist.getMusicId());
+            musicCardDto.setArtist(artist.getArtist());
+            musicCardDto.setTitle(artist.getTitle());
+            musicCardDto.setThumbnailUrl(artist.getThumbnailUrl());
+            artists.add(musicCardDto);
+        }
+        HomeDto homeDto = new HomeDto();
+        homeDto.setTodayRecommends(todays);
+        homeDto.setSavedMusic(recorded);
+        homeDto.setAlbumRecommends(albums);
+        homeDto.setArtistName(artists.get(artists.size() - 1).getArtist());
+        homeDto.setArtistRecommends(artists);
+
+        return homeDto;
+
+    }
+
 }

@@ -47,6 +47,8 @@ public class MusicService {
     private final ITunesService itunesService;
 
     private final RestTemplate restTemplate = new RestTemplate();
+    private final AlbumRepository albumRepository;
+    private final RecommendArtistRepository recommendArtistRepository;
 
     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
@@ -100,7 +102,7 @@ public class MusicService {
         RegionFullName regionFullName = vWorldClient.setRecordRegion(musicRecordDto.getLongitude(), musicRecordDto.getLatitude());
         Record record = new Record();
 
-        if (!images.isEmpty()){
+        if (images != null){
             for (MultipartFile multipartFile : images){
                 RecordImage recordImage = new RecordImage();
                 if(multipartFile.isEmpty()) continue;
@@ -272,6 +274,42 @@ public class MusicService {
             musicListResponseDtos.add(musicListResponseDto);
         }
         return musicListResponseDtos;
+    }
+
+    public AlbumDetailDto getAlbumDetail(Long userId, Long albumId) {
+        Album album = albumRepository.findById(albumId).orElseThrow(
+                () -> new NotFoundException("Album Not Found")
+        );
+        AlbumDetailDto albumDetailDto = new AlbumDetailDto();
+        albumDetailDto.setAlbumName(album.getTitle());
+        albumDetailDto.setArtistName(album.getArtist());
+        albumDetailDto.setThumbnailUrl(album.getThumbnailUrl());
+        List<MusicListResponseDto> musicListResponseDtos = new ArrayList<>();
+        for(Music music : album.getIncludedSongs()){
+            MusicListResponseDto musicListResponseDto = new MusicListResponseDto(music.getMusicId(), music.getTitle(), music.getArtist(), music.getThumbnailUrl());
+            musicListResponseDtos.add(musicListResponseDto);
+        }
+        albumDetailDto.setMusicList(musicListResponseDtos);
+        return albumDetailDto;
+    }
+
+    public ArtistRecommendDto getArtistRecommendDetail(Long userId) {
+        User user = userRepository.findUserByUserId(userId).orElseThrow(
+                UserNotFoundException::new
+        );
+        RecommendArtist recommendArtist = recommendArtistRepository.findByUser(user).orElseThrow(
+                () -> new NotFoundException("Recommend Artist Not Found")
+        );
+        ArtistRecommendDto artistRecommendDto = new ArtistRecommendDto();
+        List<MusicListResponseDto> musicListResponseDtos = new ArrayList<>();
+        List<Music> musics = recommendArtist.getRecommendedItems();
+        for (Music music : musics){
+            artistRecommendDto.setArtistName(music.getArtist());
+            MusicListResponseDto musicListResponseDto = new MusicListResponseDto(music.getMusicId(), music.getTitle(), music.getArtist(), music.getThumbnailUrl());
+            musicListResponseDtos.add(musicListResponseDto);
+        }
+        artistRecommendDto.setMusicList(musicListResponseDtos);
+        return artistRecommendDto;
     }
 
 
