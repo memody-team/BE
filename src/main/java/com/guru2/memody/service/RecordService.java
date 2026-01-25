@@ -18,6 +18,8 @@ import org.springframework.stereotype.Service;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @RequiredArgsConstructor
 @Service
@@ -102,29 +104,65 @@ public class RecordService {
         return recordDetailDto;
     }
 
-    public List<CommunityResponseDto> getCommunity() {
-//        User user = userRepository.findUserByUserId(userId).orElseThrow(
-//                UserNotFoundException::new
-//        );
-        List<CommunityResponseDto> communityResponseDtos = new ArrayList<>();
+    public List<CommunityGroupDto> getCommunity(Long userId) {
         List<Record> records = recordRepository.findAllByOrderByRecordTimeDesc();
+        User user = userRepository.findUserByUserId(userId).orElseThrow(
+                UserNotFoundException::new
+        );
+
+        List<CommunityResponseDto> allDtos = new ArrayList<>();
+
         for (Record record : records) {
-            CommunityResponseDto communityResponseDto = new CommunityResponseDto();
-            communityResponseDto.setRecordId(record.getRecordId());
-            communityResponseDto.setUserName(record.getUser().getName());
-            communityResponseDto.setMusicName(record.getRecordMusic().getTitle());
-            communityResponseDto.setArtistName(record.getRecordMusic().getArtist());
-            communityResponseDto.setContent(record.getText());
-            communityResponseDto.setThumbnailUrl(record.getRecordMusic().getThumbnailUrl());
-            communityResponseDto.setSpotifyUrl(record.getRecordMusic().getSpotifyUrl());
-            communityResponseDto.setAppleMusicUrl(record.getRecordMusic().getAppleMusicUrl());
-            communityResponseDto.setLikeCount(record.getLikeCount());
-            communityResponseDto.setRecordDate(record.getRecordTime().format(formatter));
-            communityResponseDto.setRegionName(record.getRecordLocation());
-            communityResponseDtos.add(communityResponseDto);
+            CommunityResponseDto dto = new CommunityResponseDto();
+            dto.setRecordId(record.getRecordId());
+            dto.setUserName(record.getUser().getName());
+            dto.setUserId(record.getUser().getUserId());
+
+            dto.setMusicName(record.getRecordMusic().getTitle());
+            dto.setArtistName(record.getRecordMusic().getArtist());
+            dto.setContent(record.getText());
+            dto.setThumbnailUrl(record.getRecordMusic().getThumbnailUrl());
+            dto.setSpotifyUrl(record.getRecordMusic().getSpotifyUrl());
+            dto.setAppleMusicUrl(record.getRecordMusic().getAppleMusicUrl());
+            dto.setLikeCount(record.getLikeCount());
+            dto.setRecordDate(record.getRecordTime().format(formatter));
+            dto.setRegionName(record.getRecordLocation());
+            Boolean isLiked = likeRepository.findByUserAndRecord(user, record).isPresent();
+            dto.setIsLiked(isLiked);
+
+            allDtos.add(dto);
         }
 
-        return communityResponseDtos;
+        Map<Long, List<CommunityResponseDto>> groupedMap = allDtos.stream()
+                .collect(Collectors.groupingBy(CommunityResponseDto::getUserId));
+
+        List<CommunityGroupDto> result = new ArrayList<>();
+
+        for (Long id : groupedMap.keySet()) {
+            List<CommunityResponseDto> userRecords = groupedMap.get(id);
+
+            CommunityResponseDto userInfo = userRecords.get(0);
+
+            userRecords.sort((r1, r2) -> Long.compare(r2.getRecordId(), r1.getRecordId()));
+
+            if (userRecords.size() > 5) {
+                userRecords = userRecords.subList(0, 5);
+            }
+
+            result.add(new CommunityGroupDto(
+                    id,
+                    userInfo.getUserName(),
+                    userRecords
+            ));
+        }
+
+        result.sort((u1, u2) -> {
+            Long r1LatestId = u1.getRecords().get(0).getRecordId();
+            Long r2LatestId = u2.getRecords().get(0).getRecordId();
+            return Long.compare(r2LatestId, r1LatestId);
+        });
+
+        return result;
     }
 
     @Transactional

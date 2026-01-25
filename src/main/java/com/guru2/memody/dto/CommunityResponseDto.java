@@ -17,4 +17,8 @@ public class CommunityResponseDto {
     private String appleMusicUrl;
     private String recordDate;
     private Integer likeCount;
+    private Boolean isLiked;
+
+    private Long userId;
+
 }

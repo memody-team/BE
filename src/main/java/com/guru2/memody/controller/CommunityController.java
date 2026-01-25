@@ -1,7 +1,7 @@
 package com.guru2.memody.controller;
 
 import com.guru2.memody.config.CustomUserDetails;
-import com.guru2.memody.dto.CommunityResponseDto;
+import com.guru2.memody.dto.CommunityGroupDto;
 import com.guru2.memody.dto.LikeResponseDto;
 import com.guru2.memody.service.RecordService;
 import lombok.RequiredArgsConstructor;
@@ -10,7 +10,6 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.ArrayList;
 import java.util.List;
 
 @RequiredArgsConstructor
@@ -21,8 +20,9 @@ public class CommunityController {
     private final RecordService recordService;
 
     @GetMapping
-    public ResponseEntity<List<CommunityResponseDto>> getCommunity(@AuthenticationPrincipal CustomUserDetails user) {
-        List<CommunityResponseDto> response = recordService.getCommunity();
+    public ResponseEntity<List<CommunityGroupDto>> getCommunity(@AuthenticationPrincipal CustomUserDetails user) {
+        Long userId = user.getUserId();
+        List<CommunityGroupDto> response = recordService.getCommunity(userId);
         return ResponseEntity.ok(response);
     }
 
