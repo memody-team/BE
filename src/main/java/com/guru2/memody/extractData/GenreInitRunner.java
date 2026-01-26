@@ -21,7 +21,7 @@ public class GenreInitRunner implements CommandLineRunner {
         if (genreRepository.count() > 0) return;
 
         List<String> genres = List.of(
-                "팝 (Pop)", "K-Pop", "힙합 / 랩", "R&B / 소울", "인디 / 얼터너티브", "록 / 메탈", "일렉트로닉 / EDM", "재즈", "클래식", "OST / 영화음악", "로파이 / 칠", "트로트"
+                "POP", "KPOP", "HIPHOP", "RNB", "INDIE", "ROCK", "ELECTRONIC", "JAZZ", "CLASSIC", "OST", "LOFI", "TROT"
         );
 
         for (String g : genres) {
