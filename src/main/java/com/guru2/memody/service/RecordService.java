@@ -128,8 +128,10 @@ public class RecordService {
             dto.setRecordDate(record.getRecordTime().format(formatter));
             dto.setRegionName(record.getRecordLocation());
             Boolean isLiked = likeRepository.findByUserAndRecord(user, record).isPresent();
+            if(isLiked) {
+                isLiked = likeRepository.findByUserAndRecord(user, record).get().getIsLiked();
+            }
             dto.setIsLiked(isLiked);
-
             allDtos.add(dto);
         }
 
