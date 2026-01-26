@@ -21,7 +21,7 @@ public class ArtistInitRunner implements CommandLineRunner {
         if (artistRepository.count() > 0) return;
 
         List<String> artists = List.of(
-                "아이유", "NewJeans", "세븐틴", "(여자)아이들", "Taylor Swift", "Billie Eilish", "Ariana Grande", "The Weekend", "실리카겔", "백예린", "AKMU", "Lauv", "YOASOBI", "Olivia Rodrigo", "IVE", "ZICO"
+                "TaylorSwift", "NewJeans", "세븐틴", "YOASOBI", "아이유", "ROSE", "백예린", "ILLIT", "카더가든", "OFFICIALHIGEDANDISM", "잔나비", "KATSEYE"
         );
 
         for (String a : artists) {

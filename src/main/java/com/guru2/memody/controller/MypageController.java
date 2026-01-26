@@ -1,6 +1,7 @@
 package com.guru2.memody.controller;
 
 import com.guru2.memody.config.CustomUserDetails;
+import com.guru2.memody.dto.RegionUpdateDto;
 import com.guru2.memody.repository.RegionRepository;
 import com.guru2.memody.service.UserService;
 import lombok.RequiredArgsConstructor;
@@ -22,7 +23,7 @@ public class MypageController {
 
     @PatchMapping("/region")
     public ResponseEntity<String> updateRegion(@AuthenticationPrincipal CustomUserDetails user,
-                                               @RequestParam String region) {
+                                               @RequestParam RegionUpdateDto region) {
         Long userId = user.getUserId();
         String response = userService.updateRegion(userId, region);
 

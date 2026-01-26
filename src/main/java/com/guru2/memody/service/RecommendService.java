@@ -18,6 +18,7 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Limit;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -25,6 +26,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Slf4j
 @Service
@@ -39,9 +44,12 @@ public class RecommendService {
     private final ArtistRepository artistRepository;
     private final RecommendMusicRepository recommendMusicRepository;
 
-    @Value("${GEMINI_API_KEY}") // properties에 넣은 값
+    @Value("${GEMINI_API_KEY}")
     private String geminiApiKey;
-    private final String GEMINI_API_KEY = System.getenv("GEMINI_API_KEY");
+
+    // I/O 바운드 작업(네트워크 호출)을 위한 스레드 풀 설정 (동시 요청 20개까지 처리)
+    private final ExecutorService apiExecutor = Executors.newFixedThreadPool(20);
+
     private final String GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
     private final GenrePreferenceRepository genrePreferenceRepository;
     private final ArtistPreferenceRepository artistPreferenceRepository;
@@ -306,213 +314,198 @@ public class RecommendService {
 
 
 
+    private Music fetchMusicLogic(String title, String artistName) {
+        try {
+            String musicResponse = itunesService.searchTrackWithClearInfo(title, artistName);
+            JsonNode root = objectMapper.readTree(musicResponse);
+            JsonNode results = root.path("results");
+
+            if (results.isEmpty()) return null;
+
+            JsonNode trackNode = results.get(0);
+            Long trackId = trackNode.path("trackId").asLong();
+
+            // DB 조회 혹은 생성 (동시성 이슈 방지를 위해 여기서 save)
+            Music music = musicRepository.findMusicByItunesId(trackId).orElse(new Music());
+
+            synchronized (this) { // save 시 중복 방지를 위한 간단한 동기화 (선택 사항)
+                music.setItunesId(trackId);
+                music.setTitle(trackNode.path("trackName").asText());
+                music.setArtist(trackNode.path("artistName").asText());
+                music.setAppleMusicUrl(trackNode.path("trackViewUrl").asText());
+                music.setThumbnailUrl(trackNode.path("artworkUrl100").asText());
+                musicRepository.save(music);
+            }
+            return music;
+        } catch (Exception e) {
+            log.error("iTunes 곡 검색 실패: {} - {}", title, artistName, e);
+            return null;
+        }
+    }
+
+    /**
+     * 앨범 및 수록곡 검색 로직 (비동기 호출용)
+     */
+    private Album fetchAlbumLogic(String title, String artistName) {
+        try {
+            String albumResponse = itunesService.searchAlbumWithClearInfo(title, artistName);
+            JsonNode root = objectMapper.readTree(albumResponse);
+            JsonNode results = root.path("results");
+
+            if (results.isEmpty()) return null;
+
+            JsonNode albumNode = results.get(0);
+            Long albumItunesId = albumNode.path("collectionId").asLong();
+
+            Album album = albumRepository.findByItunesId(albumItunesId).orElse(new Album());
+            album.setItunesId(albumItunesId);
+            album.setTitle(albumNode.path("collectionName").asText());
+            album.setArtist(albumNode.path("artistName").asText());
+            album.setThumbnailUrl(albumNode.path("artworkUrl100").asText());
+            albumRepository.save(album);
+
+            // 앨범 수록곡 검색
+            String musicResponse = itunesService.lookupTracksByAlbumId(albumItunesId);
+            JsonNode trackResults = objectMapper.readTree(musicResponse).path("results");
+            List<Music> currentAlbumTracks = new ArrayList<>();
+
+            for (JsonNode trackNode : trackResults) {
+                if ("track".equals(trackNode.path("wrapperType").asText())) {
+                    Long trackId = trackNode.path("trackId").asLong();
+                    Music music = musicRepository.findMusicByItunesId(trackId).orElse(new Music());
+                    music.setItunesId(trackId);
+                    music.setTitle(trackNode.path("trackName").asText());
+                    music.setArtist(trackNode.path("artistName").asText());
+                    music.setAppleMusicUrl(trackNode.path("trackViewUrl").asText());
+                    music.setThumbnailUrl(trackNode.path("artworkUrl100").asText());
+                    musicRepository.save(music);
+                    currentAlbumTracks.add(music);
+                }
+            }
+            album.setIncludedSongs(currentAlbumTracks);
+            return album;
+        } catch (Exception e) {
+            log.error("iTunes 앨범 검색 실패: {} - {}", title, artistName, e);
+            return null;
+        }
+    }
+
+    // =================================================================================
+    // [서비스 메서드] CompletableFuture 적용
+    // =================================================================================
+
+    @Transactional
     public List<MusicListResponseDto> getRecommendTrackByOnboarding(Long userId, RecommendRequestDto recommendRequestDto) throws JsonProcessingException {
         User user = userRepository.findUserByUserId(userId).orElseThrow(UserNotFoundException::new);
-        recommendRepository.findByUser(user)
-                .ifPresent(recommendRepository::delete);
+
+        // 기존 추천 내역 삭제 및 초기화
+        recommendRepository.findByUser(user).ifPresent(recommendRepository::delete);
+
         RecommendMusic recommend = new RecommendMusic();
         recommend.setUser(user);
         recommend.setMomentType(Moment.valueOf(recommendRequestDto.getMoment()));
         recommend.setMoodType(Mood.valueOf(recommendRequestDto.getMood()));
         recommend.setCreateTime(LocalDateTime.now());
 
+        // 1. Gemini 호출
+        // (주의: createPromptWithOnboarding 메서드는 기존 코드에 있는 내용을 사용해야 합니다)
         String prompt = createPromptWithOnboarding(user, recommendRequestDto);
         String response = callGemini(prompt);
         List<GeminiRecommendationDto> recommendedItems = parseGeminiResponse(response);
 
-        List<MusicListResponseDto> trackList = new ArrayList<>();
-        List<Music> musicList = new ArrayList<>();
+        // 2. 병렬 처리 (기존 for문 대체)
+        List<CompletableFuture<Music>> futures = recommendedItems.stream()
+                .map(item -> CompletableFuture.supplyAsync(() -> fetchMusicLogic(item.getTitle(), item.getArtist()), apiExecutor))
+                .toList();
 
-        for(GeminiRecommendationDto item : recommendedItems) {
-            try{
-                String musicResponse = itunesService.searchTrackWithClearInfo(item.getTitle(), item.getArtist());
-                ObjectMapper mapper = new ObjectMapper();
-                JsonNode root = mapper.readTree(musicResponse);
+        List<Music> musicList = futures.stream()
+                .map(CompletableFuture::join)
+                .filter(Objects::nonNull)
+                .toList();
 
-                JsonNode results = root.path("results");
-                for (JsonNode trackNode : results) {
-                    Music music = null;
-                    music = musicRepository.findMusicByItunesId(trackNode.path("trackId").asLong()).orElse(
-                            new Music()
-                    );
+        recommend.setRecommendMusics(musicList);
+        recommendRepository.save(recommend);
 
-                    music.setItunesId(trackNode.path("trackId").asLong());
-                    music.setTitle(trackNode.path("trackName").asText());
-                    music.setArtist(trackNode.path("artistName").asText());
-                    music.setAppleMusicUrl(trackNode.path("trackViewUrl").asText());
-                    music.setThumbnailUrl(trackNode.path("artworkUrl100").asText());
-                    musicList.add(music);
-                    musicRepository.save(music);
-
-                    trackList.add(new MusicListResponseDto(
-                            music.getMusicId(),
-                            trackNode.path("trackName").asText(),
-                            trackNode.path("artistName").asText(),
-                            trackNode.path("artworkUrl100").asText()
-                    ));
-                }
-            } catch (Exception e) {
-                log.error("iTunes 검색 중 오류 발생: {} - {}", item.getTitle(), item.getArtist(), e);
-            }
-
-            recommend.setRecommendMusics(musicList);
-            recommendRepository.save(recommend);
-        }
-
-        return trackList;
+        return musicList.stream()
+                .map(m -> new MusicListResponseDto(m.getMusicId(), m.getTitle(), m.getArtist(), m.getThumbnailUrl()))
+                .toList();
     }
 
+    @Transactional
     public List<MusicListResponseDto> getRecommendTrackByUserInfo(Long userId){
-        User user = userRepository.findUserByUserId(userId).orElseThrow(
-                UserNotFoundException::new
-        );
+        User user = userRepository.findUserByUserId(userId).orElseThrow(UserNotFoundException::new);
+        RecommendMusic recommend = recommendRepository.findByUser(user).orElseGet(RecommendMusic::new);
 
-        RecommendMusic recommend = recommendRepository.findByUser(user).orElseGet(
-                RecommendMusic::new
-        );
-        List<MusicListResponseDto> trackList = new ArrayList<>();
-        if (recommend.getRecommendMusics() != null && recommend.getCreateTime().toLocalDate().isEqual(LocalDate.now())) {
-            for (Music music : recommend.getRecommendMusics()) {
-                MusicListResponseDto musicListResponseDto = new MusicListResponseDto(music.getMusicId(), music.getTitle(), music.getArtist(), music.getThumbnailUrl());
-                trackList.add(musicListResponseDto);
-            }
-            return trackList;
+        // 오늘 날짜 캐시 확인
+        if (recommend.getRecommendMusics() != null && !recommend.getRecommendMusics().isEmpty()
+                && recommend.getCreateTime().toLocalDate().isEqual(LocalDate.now())) {
+            return recommend.getRecommendMusics().stream()
+                    .map(m -> new MusicListResponseDto(m.getMusicId(), m.getTitle(), m.getArtist(), m.getThumbnailUrl()))
+                    .toList();
         }
 
         recommend.setUser(user);
-        recommend.setMomentType(null);
-        recommend.setMoodType(null);
         recommend.setCreateTime(LocalDateTime.now());
 
+        // 1. Gemini 호출
         String prompt = createPromptWithUserInfo(user, "곡 제목");
         String response = callGemini(prompt);
         List<GeminiRecommendationDto> recommendedItems = parseGeminiResponse(response);
 
-        List<Music> musicList = new ArrayList<>();
+        // 2. 병렬 처리
+        List<CompletableFuture<Music>> futures = recommendedItems.stream()
+                .map(item -> CompletableFuture.supplyAsync(() -> fetchMusicLogic(item.getTitle(), item.getArtist()), apiExecutor))
+                .toList();
 
-        for(GeminiRecommendationDto item : recommendedItems) {
-            try{
-                String musicResponse = itunesService.searchTrackWithClearInfo(item.getTitle(), item.getArtist());
-                ObjectMapper mapper = new ObjectMapper();
-                JsonNode root = mapper.readTree(musicResponse);
+        List<Music> musicList = futures.stream()
+                .map(CompletableFuture::join)
+                .filter(Objects::nonNull)
+                .toList();
 
-                JsonNode results = root.path("results");
-                for (JsonNode trackNode : results) {
-                    Music music = null;
-                    music = musicRepository.findMusicByItunesId(trackNode.path("trackId").asLong()).orElse(
-                            new Music()
-                    );
+        recommend.setRecommendMusics(musicList);
+        recommendRepository.save(recommend);
 
-                    music.setItunesId(trackNode.path("trackId").asLong());
-                    music.setTitle(trackNode.path("trackName").asText());
-                    music.setArtist(trackNode.path("artistName").asText());
-                    music.setAppleMusicUrl(trackNode.path("trackViewUrl").asText());
-                    music.setThumbnailUrl(trackNode.path("artworkUrl100").asText());
-                    musicList.add(music);
-                    musicRepository.save(music);
-
-                    trackList.add(new MusicListResponseDto(
-                            music.getMusicId(),
-                            trackNode.path("trackName").asText(),
-                            trackNode.path("artistName").asText(),
-                            trackNode.path("artworkUrl100").asText()
-                    ));
-                }
-            } catch (Exception e) {
-                log.error("iTunes 검색 중 오류 발생: {} - {}", item.getTitle(), item.getArtist(), e);
-            }
-
-            recommend.setRecommendMusics(musicList);
-            recommendRepository.save(recommend);
-        }
-
-        return trackList;
+        return musicList.stream()
+                .map(m -> new MusicListResponseDto(m.getMusicId(), m.getTitle(), m.getArtist(), m.getThumbnailUrl()))
+                .toList();
     }
 
     @Transactional
     public RecommendAlbum getRecommendAlbumByUserInfo(Long userId) {
-        User user = userRepository.findUserByUserId(userId).orElseThrow(
-                UserNotFoundException::new
-        );
-        RecommendAlbum recommendAlbum = recommendAlbumRepository.findByUser(user)
-                .orElseGet(
-                RecommendAlbum::new
-        );
+        User user = userRepository.findUserByUserId(userId).orElseThrow(UserNotFoundException::new);
+        RecommendAlbum recommendAlbum = recommendAlbumRepository.findByUser(user).orElseGet(RecommendAlbum::new);
         recommendAlbum.setUser(user);
-        if (recommendAlbum.getAlbums() != null && recommendAlbum.getCreateTime().toLocalDate().isEqual(LocalDate.now())) {
+
+        if (recommendAlbum.getAlbums() != null && !recommendAlbum.getAlbums().isEmpty()
+                && recommendAlbum.getCreateTime().toLocalDate().isEqual(LocalDate.now())) {
             return recommendAlbum;
         }
 
+        // 1. Gemini 호출
         String prompt = createPromptWithUserInfo(user, "앨범 명");
         String response = callGemini(prompt);
         List<GeminiRecommendationDto> recommendedItems = parseGeminiResponse(response);
 
-        List<Album> albumList = new ArrayList<>();
-        ObjectMapper mapper = new ObjectMapper();
+        // 2. 병렬 처리 (앨범 검색 + 수록곡 검색을 묶어서 병렬화)
+        List<CompletableFuture<Album>> futures = recommendedItems.stream()
+                .map(item -> CompletableFuture.supplyAsync(() -> fetchAlbumLogic(item.getTitle(), item.getArtist()), apiExecutor))
+                .toList();
 
-        for(GeminiRecommendationDto item : recommendedItems) {
-            try {
-                String albumResponse = itunesService.searchAlbumWithClearInfo(item.getTitle(), item.getArtist());
-                JsonNode root = mapper.readTree(albumResponse);
+        List<Album> albumList = futures.stream()
+                .map(CompletableFuture::join)
+                .filter(Objects::nonNull)
+                .toList();
 
-                JsonNode results = root.path("results");
-                for (JsonNode albumNode : results) {
-                    Long albumItunesId = albumNode.path("collectionId").asLong();
-                    Album album = null;
-                    album = albumRepository.findByItunesId(albumItunesId).orElse(
-                            new Album()
-                    );
-
-                    album.setItunesId(albumItunesId);
-                    album.setTitle(albumNode.path("collectionName").asText());
-                    album.setArtist(albumNode.path("artistName").asText());
-                    album.setThumbnailUrl(albumNode.path("artworkUrl100").asText());
-                    albumList.add(album);
-                    albumRepository.save(album);
-
-                    String musicResponse = itunesService.lookupTracksByAlbumId(albumItunesId);
-                    JsonNode trackRoot = mapper.readTree(musicResponse);
-                    JsonNode trackResults = trackRoot.path("results");
-                    List<Music> currentAlbumTracks = new ArrayList<>();
-
-                    for (int i = 0; i < trackResults.size(); i++) {
-                        JsonNode trackNode = trackResults.get(i);
-                        if (trackNode.path("wrapperType").asText().equals("track")) {
-                            Music music = musicRepository.findMusicByItunesId(trackNode.path("trackId").asLong())
-                                    .orElse(new Music());
-
-                            music.setItunesId(trackNode.path("trackId").asLong());
-                            music.setTitle(trackNode.path("trackName").asText());
-                            music.setArtist(trackNode.path("artistName").asText());
-                            music.setAppleMusicUrl(trackNode.path("trackViewUrl").asText());
-                            music.setThumbnailUrl(trackNode.path("artworkUrl100").asText());
-
-                            musicRepository.save(music);
-                            currentAlbumTracks.add(music);
-                        }
-                    }
-                    album.setIncludedSongs(currentAlbumTracks);
-                }
-
-
-            } catch (JsonProcessingException jsonProcessingException) {
-                throw new RuntimeException(jsonProcessingException);
-            } catch (Exception e) {
-                log.error("iTunes 검색 중 오류 발생: {} - {}", item.getTitle(), item.getArtist(), e);
-            }
-
-        }
         recommendAlbum.setAlbums(albumList);
         recommendAlbum.setCreateTime(LocalDateTime.now());
         recommendAlbumRepository.save(recommendAlbum);
-        return recommendAlbum;
 
+        return recommendAlbum;
     }
 
     @Transactional
     public RecommendArtist getRecommendArtistByUserInfo(Long userId) {
         User user = userRepository.findUserByUserId(userId).orElseThrow(UserNotFoundException::new);
-
         RecommendArtist recommendArtist = recommendArtistRepository.findByUser(user)
                 .orElseGet(() -> {
                     RecommendArtist newRa = new RecommendArtist();
@@ -520,75 +513,48 @@ public class RecommendService {
                     return newRa;
                 });
 
-        if (recommendArtist.getArtist() != null && recommendArtist.getCreateTime() != null
+        if (recommendArtist.getArtist() != null
+                && recommendArtist.getCreateTime() != null
                 && recommendArtist.getCreateTime().toLocalDate().isEqual(LocalDate.now())) {
             return recommendArtist;
         }
 
+        // 1. Gemini 호출
         String prompt = createArtistPromptWithUserInfo(user);
         String response = callGemini(prompt);
         List<GeminiRecommendationDto> recommendedItems = parseGeminiResponse(response);
 
-        if (recommendedItems.isEmpty()) {
-            throw new RuntimeException("AI 추천 결과가 없습니다.");
-        }
+        if (recommendedItems.isEmpty()) throw new RuntimeException("AI 추천 결과가 없습니다.");
 
+        // 2. 아티스트 정보 저장 (단건이므로 동기 처리)
         String artistName = recommendedItems.get(0).getArtist();
         Artist artist = null;
-
         try {
             String artistJson = itunesService.searchArtistWithItunes(artistName);
-            JsonNode artistRoot = objectMapper.readTree(artistJson);
-            JsonNode artistResults = artistRoot.path("results");
-
+            JsonNode artistResults = objectMapper.readTree(artistJson).path("results");
             if (artistResults.size() > 0) {
                 JsonNode artistNode = artistResults.get(0);
                 Long itunesArtistId = artistNode.path("artistId").asLong();
-
                 artist = artistRepository.findByItunesArtistId(itunesArtistId).orElse(new Artist());
                 artist.setItunesArtistId(itunesArtistId);
                 artist.setArtistName(artistNode.path("artistName").asText());
-
-
                 artistRepository.save(artist);
-            } else {
-                log.warn("iTunes 가수 검색 실패: {}", artistName);
             }
         } catch (Exception e) {
             log.error("가수 정보 처리 중 오류: {}", artistName, e);
         }
+        recommendArtist.setArtist(artist); // 아티스트 설정 추가
 
-        List<Music> musicList = new ArrayList<>();
+        // 3. 곡 목록 병렬 처리
+        List<CompletableFuture<Music>> futures = recommendedItems.stream()
+                .map(item -> CompletableFuture.supplyAsync(() -> fetchMusicLogic(item.getTitle(), item.getArtist()), apiExecutor))
+                .toList();
 
-        for (GeminiRecommendationDto item : recommendedItems) {
-            try {
-                String searchResponse = itunesService.searchTrackWithClearInfo(item.getTitle(), item.getArtist());
-                JsonNode root = objectMapper.readTree(searchResponse);
-                JsonNode results = root.path("results");
+        List<Music> musicList = futures.stream()
+                .map(CompletableFuture::join)
+                .filter(Objects::nonNull)
+                .toList();
 
-                if (results.size() > 0) {
-                    JsonNode trackNode = results.get(0);
-
-                    Music music = musicRepository.findMusicByItunesId(trackNode.path("trackId").asLong())
-                            .orElse(new Music());
-
-                    music.setItunesId(trackNode.path("trackId").asLong());
-                    music.setTitle(trackNode.path("trackName").asText());
-                    music.setArtist(trackNode.path("artistName").asText());
-                    music.setAppleMusicUrl(trackNode.path("trackViewUrl").asText());
-                    music.setThumbnailUrl(trackNode.path("artworkUrl100").asText());
-
-                    musicRepository.save(music);
-                    musicList.add(music);
-                }
-            } catch (Exception e) {
-                log.warn("가수 추천 곡 검색 실패: {}", item.getTitle());
-            }
-        }
-
-        if (artist != null) {
-            recommendArtist.setArtist(artist);
-        }
         recommendArtist.setRecommendedItems(musicList);
         recommendArtist.setCreateTime(LocalDateTime.now());
         recommendArtistRepository.save(recommendArtist);
@@ -677,5 +643,4 @@ public class RecommendService {
         return homeDto;
 
     }
-
 }

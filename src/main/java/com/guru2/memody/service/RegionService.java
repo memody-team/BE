@@ -49,4 +49,9 @@ public class RegionService {
         }
         return new ResponseEntity<>(regionNames, HttpStatus.OK);
     }
+
+    public ResponseEntity<String> getRegion(@RequestParam Double lat, @RequestParam Double lon) {
+        String response = vWorldClient.getRegionName(lat, lon);
+        return new ResponseEntity<>(response, HttpStatus.OK);
+    }
 }

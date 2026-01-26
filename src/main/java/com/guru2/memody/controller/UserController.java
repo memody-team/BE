@@ -2,6 +2,7 @@ package com.guru2.memody.controller;
 
 import com.guru2.memody.config.CustomUserDetails;
 import com.guru2.memody.dto.LoginRequestDto;
+import com.guru2.memody.dto.RegionUpdateDto;
 import com.guru2.memody.dto.SignUpDto;
 import com.guru2.memody.dto.SignUpResponseDto;
 import com.guru2.memody.entity.Region;
@@ -50,7 +51,7 @@ public class UserController {
 
     @PatchMapping("/region")
     public ResponseEntity<String> updateRegion(@RequestParam Long userId,
-                                               @RequestParam String region) {
+                                               @RequestBody RegionUpdateDto region) {
         String response = userService.updateRegion(userId, region);
         return ResponseEntity.ok(response);
     }

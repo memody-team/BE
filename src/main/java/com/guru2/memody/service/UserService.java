@@ -6,6 +6,7 @@ import com.guru2.memody.Exception.UserNameAlreadyExistsException;
 import com.guru2.memody.Exception.UserNotFoundException;
 import com.guru2.memody.config.JwtTokenProvider;
 import com.guru2.memody.dto.LoginRequestDto;
+import com.guru2.memody.dto.RegionUpdateDto;
 import com.guru2.memody.dto.SignUpDto;
 import com.guru2.memody.dto.SignUpResponseDto;
 import com.guru2.memody.entity.*;
@@ -82,8 +83,8 @@ public class UserService {
     }
 
     @Transactional
-    public String updateRegion(Long userId, String region) {
-        Region reg = regionRepository.findFirstByFullNameContaining(region);
+    public String updateRegion(Long userId, RegionUpdateDto region) {
+        Region reg = regionRepository.findFirstByFullNameContaining(region.getRegion());
         if(reg == null) {
             throw new RegionWrongException("Region not found");
         }
@@ -92,6 +93,13 @@ public class UserService {
         );
 
         user.setLocation(reg);
+        if(region.getLatitude() == null && region.getLongitude() == null){
+
+        } else {
+            user.setLatitude(region.getLatitude());
+            user.setLongitude(region.getLongitude());
+            userRepository.save(user);
+        }
         return "Patch Region Successful: " + reg.getFullName();
 
     }

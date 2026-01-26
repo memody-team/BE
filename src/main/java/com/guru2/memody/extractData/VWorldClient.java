@@ -163,4 +163,17 @@ public class VWorldClient {
 
         return regionFullName;
     }
+
+    public String getRegionName(Double lon, Double lat){
+                List<VWorldFeatureResponse.Feature> features = getFNByGpsPoint(lon, lat);
+
+        if (features == null || features.isEmpty()) {
+            log.info("바다 혹은 데이터 미제공 지역: " + lon + ", " + lat);
+
+            return "위치 정보 없음";
+        }
+        var p = features.get(0).getProperties();
+
+        return p.getFull_nm();
+    }
 }

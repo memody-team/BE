@@ -24,4 +24,5 @@ public class RegionController {
         ResponseEntity<List<String>> response = regionService.searchRegions(region);
         return response;
     }
+
 }

@@ -27,4 +27,7 @@ public class User {
 
     @Column(length = 500, nullable = true)
     private String profileImageUrl;
+
+    private Double latitude;
+    private Double longitude;
 }
